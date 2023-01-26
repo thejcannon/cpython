@@ -10,6 +10,7 @@ import itertools
 import abc
 import _thread
 from types import FunctionType, GenericAlias
+from typing import Any
 
 
 __all__ = ['dataclass',
@@ -180,6 +181,13 @@ class _HAS_DEFAULT_FACTORY_CLASS:
         return '<factory>'
 _HAS_DEFAULT_FACTORY = _HAS_DEFAULT_FACTORY_CLASS()
 
+# Marker for default values.
+class _HAS_DEFAULT_VALUE_CLASS:
+    def __init__(self, default):
+        self.default = default
+    def __repr__(self):
+        return repr(self.default)
+
 # A sentinel object to detect if a parameter is supplied or not.  Use
 # a class to give it a better repr.
 class _MISSING_TYPE:
@@ -281,11 +289,12 @@ class Field:
                  'compare',
                  'metadata',
                  'kw_only',
+                 'converter',
                  '_field_type',  # Private: not to be used by user code.
                  )
 
     def __init__(self, default, default_factory, init, repr, hash, compare,
-                 metadata, kw_only):
+                 metadata, kw_only, converter):
         self.name = None
         self.type = None
         self.default = default
@@ -298,6 +307,7 @@ class Field:
                          if metadata is None else
                          types.MappingProxyType(metadata))
         self.kw_only = kw_only
+        self.converter = converter
         self._field_type = None
 
     @_recursive_repr
@@ -313,6 +323,7 @@ class Field:
                 f'compare={self.compare!r},'
                 f'metadata={self.metadata!r},'
                 f'kw_only={self.kw_only!r},'
+                f'converter={self.converter!r},'
                 f'_field_type={self._field_type}'
                 ')')
 
@@ -380,7 +391,8 @@ class _DataclassParams:
 # so that a type checker can be told (via overloads) that this is a
 # function whose type depends on its parameters.
 def field(*, default=MISSING, default_factory=MISSING, init=True, repr=True,
-          hash=None, compare=True, metadata=None, kw_only=MISSING):
+          hash=None, compare=True, metadata=None, kw_only=MISSING,
+          converter=MISSING):
     """Return an object to identify dataclass fields.
 
     default is the default value of the field.  default_factory is a
@@ -400,7 +412,7 @@ def field(*, default=MISSING, default_factory=MISSING, init=True, repr=True,
     if default is not MISSING and default_factory is not MISSING:
         raise ValueError('cannot specify both default and default_factory')
     return Field(default, default_factory, init, repr, hash, compare,
-                 metadata, kw_only)
+                 metadata, kw_only, converter)
 
 
 def _fields_in_init_order(fields):
@@ -469,6 +481,9 @@ def _field_init(f, frozen, globals, self_name, slots):
     # initialize this field.
 
     default_name = f'_dflt_{f.name}'
+    converter_name = f'_cvrt_{f.name}'
+    if f.converter is not MISSING:
+        globals[converter_name] = f.converter
     if f.default_factory is not MISSING:
         if f.init:
             # This field has a default factory.  If a parameter is
@@ -476,7 +491,9 @@ def _field_init(f, frozen, globals, self_name, slots):
             globals[default_name] = f.default_factory
             value = (f'{default_name}() '
                      f'if {f.name} is _HAS_DEFAULT_FACTORY '
-                     f'else {f.name}')
+                     f'else '
+                    ) + (f'{converter_name}({f.name})'
+                        if f.converter is not MISSING else f.name)
         else:
             # This is a field that's not in the __init__ params, but
             # has a default factory function.  It needs to be
@@ -497,12 +514,14 @@ def _field_init(f, frozen, globals, self_name, slots):
     else:
         # No default factory.
         if f.init:
-            if f.default is MISSING:
-                # There's no default, just do an assignment.
-                value = f.name
-            elif f.default is not MISSING:
+            if f.default is not MISSING:
                 globals[default_name] = f.default
-                value = f.name
+                value = (f"{f.name}.default "
+                         f"if isinstance({f.name}, _HAS_DEFAULT_VALUE_CLASS) "
+                         f"else {f.name}")
+            else:
+                value = (f'{converter_name}({f.name})'
+                        if f.converter is not MISSING else f.name)
         else:
             # If the class has slots, then initialize this field.
             if slots and f.default is not MISSING:
@@ -534,9 +553,9 @@ def _init_param(f):
         # variable name and type.
         default = ''
     elif f.default is not MISSING:
-        # There's a default, this will be the name that's used to look
-        # it up.
-        default = f'=_dflt_{f.name}'
+        # There's a default, mark it with the name of the value that's used to
+        # look it up.
+        default = f'=_HAS_DEFAULT_VALUE_CLASS(_dflt_{f.name})'
     elif f.default_factory is not MISSING:
         # There's a factory function.  Set a marker.
         default = '=_HAS_DEFAULT_FACTORY'
@@ -563,10 +582,11 @@ def _init_fn(fields, std_fields, kw_only_fields, frozen, has_post_init,
                 raise TypeError(f'non-default argument {f.name!r} '
                                 'follows default argument')
 
-    locals = {f'_type_{f.name}': f.type for f in fields}
+    locals = {f'_type_{f.name}': Any if f.converter is not MISSING else f.type for f in fields}
     locals.update({
         'MISSING': MISSING,
         '_HAS_DEFAULT_FACTORY': _HAS_DEFAULT_FACTORY,
+        '_HAS_DEFAULT_VALUE_CLASS': _HAS_DEFAULT_VALUE_CLASS,
         '__dataclass_builtins_object__': object,
     })
 
@@ -580,8 +600,11 @@ def _init_fn(fields, std_fields, kw_only_fields, frozen, has_post_init,
 
     # Does this class have a post-init function?
     if has_post_init:
-        params_str = ','.join(f.name for f in fields
-                              if f._field_type is _FIELD_INITVAR)
+        params_str = ','.join((f.name if f.default is MISSING else
+                                (f"{f.name}.default "
+                                 f"if isinstance({f.name}, _HAS_DEFAULT_VALUE_CLASS) "
+                                 f"else {f.name}"))
+                              for f in fields if f._field_type is _FIELD_INITVAR)
         body_lines.append(f'{self_name}.{_POST_INIT_NAME}({params_str})')
 
     # If no body lines, use 'pass'.

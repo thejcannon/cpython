@@ -64,6 +64,7 @@ class TestCase(unittest.TestCase):
                            "init=True,repr=False,hash=None," \
                            "compare=True,metadata=mappingproxy({})," \
                            f"kw_only={MISSING!r}," \
+                           f"converter={MISSING!r}," \
                            "_field_type=None)"
 
         self.assertEqual(repr_output, expected_output)
@@ -2255,6 +2256,12 @@ class TestDocString(unittest.TestCase):
 
         self.assertDocStrEqual(C.__doc__, "C(x:collections.deque=<factory>)")
 
+    def test_docstring_converter_field_with_default(self):
+        @dataclass
+        class C:
+            x: int = field(converter=int, default=0)
+
+        self.assertDocStrEqual(C.__doc__, "C(x:Any=0)")
 
 class TestInit(unittest.TestCase):
     def test_base_has_init(self):
@@ -3561,6 +3568,10 @@ class TestStringAnnotations(unittest.TestCase):
             get_type_hints(dataclass_textanno.Bar.__init__),
             {'foo': dataclass_textanno.Foo,
              'return': type(None)})
+        self.assertEqual(
+            get_type_hints(dataclass_textanno.HasConverter.__init__),
+            {'s': Any,
+             'return': type(None)})
 
 
 class TestMakeDataclass(unittest.TestCase):
@@ -3864,6 +3875,7 @@ class TestReplace(unittest.TestCase):
                     self.x += z
 
         c = C(x=1, y=10, z=1)
+        C(x=12)
         self.assertEqual(replace(c), C(x=12))
         self.assertEqual(replace(c, y=4), C(x=12, y=4, z=42))
         self.assertEqual(replace(c, y=4, z=1), C(x=12, y=4, z=1))
@@ -4329,6 +4341,25 @@ class TestKeywordArgs(unittest.TestCase):
                            kw_only=True)
         self.assertTrue(fields(B)[0].kw_only)
         self.assertFalse(fields(B)[1].kw_only)
+
+class TestConverters(unittest.TestCase):
+    def test_argument_conversion(self):
+        @dataclass
+        class A:
+            a: int
+            b: str = field(converter=str)
+            c: int = field(converter=lambda x: x+1)
+            d: int = field(converter=lambda x: x+1, default=0)
+            e: int = field(converter=lambda x: x+1, default_factory=int)
+
+        a = A(a=1, b=2, c=3)
+        self.assertEqual(a.a, 1)
+        self.assertEqual(a.b, "2")
+        self.assertEqual(a.c, 4)
+        self.assertEqual(a.d, 0)
+        self.assertEqual(a.e, 0)
+
+
 
 
 if __name__ == '__main__':

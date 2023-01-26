@@ -10,3 +10,8 @@ class Foo:
 @dataclasses.dataclass
 class Bar:
     foo: Foo
+
+
+@dataclasses.dataclass
+class HasConverter:
+    s: str = dataclasses.field(converter=str)
