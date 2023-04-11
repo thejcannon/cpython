@@ -4356,7 +4356,7 @@ class TestConverters(unittest.TestCase):
         self.assertEqual(a.a, 1)
         self.assertEqual(a.b, "2")
         self.assertEqual(a.c, 4)
-        self.assertEqual(a.d, 0)
+        self.assertEqual(a.d, 1)
         self.assertEqual(a.e, 0)
 
 

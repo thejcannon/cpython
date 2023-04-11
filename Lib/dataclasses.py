@@ -181,13 +181,6 @@ class _HAS_DEFAULT_FACTORY_CLASS:
         return '<factory>'
 _HAS_DEFAULT_FACTORY = _HAS_DEFAULT_FACTORY_CLASS()
 
-# Marker for default values.
-class _HAS_DEFAULT_VALUE_CLASS:
-    def __init__(self, default):
-        self.default = default
-    def __repr__(self):
-        return repr(self.default)
-
 # A sentinel object to detect if a parameter is supplied or not.  Use
 # a class to give it a better repr.
 class _MISSING_TYPE:
@@ -514,14 +507,9 @@ def _field_init(f, frozen, globals, self_name, slots):
     else:
         # No default factory.
         if f.init:
-            if f.default is not MISSING:
-                globals[default_name] = f.default
-                value = (f"{f.name}.default "
-                         f"if isinstance({f.name}, _HAS_DEFAULT_VALUE_CLASS) "
-                         f"else {f.name}")
-            else:
-                value = (f'{converter_name}({f.name})'
-                        if f.converter is not MISSING else f.name)
+            globals[default_name] = f.default
+            value = (f'{converter_name}({f.name})'
+                     if f.converter is not MISSING else f.name)
         else:
             # If the class has slots, then initialize this field.
             if slots and f.default is not MISSING:
@@ -553,9 +541,9 @@ def _init_param(f):
         # variable name and type.
         default = ''
     elif f.default is not MISSING:
-        # There's a default, mark it with the name of the value that's used to
-        # look it up.
-        default = f'=_HAS_DEFAULT_VALUE_CLASS(_dflt_{f.name})'
+        # There's a default, this will be the name that's used to look
+        # it up.
+        default = f'=_dflt_{f.name}'
     elif f.default_factory is not MISSING:
         # There's a factory function.  Set a marker.
         default = '=_HAS_DEFAULT_FACTORY'
@@ -586,7 +574,6 @@ def _init_fn(fields, std_fields, kw_only_fields, frozen, has_post_init,
     locals.update({
         'MISSING': MISSING,
         '_HAS_DEFAULT_FACTORY': _HAS_DEFAULT_FACTORY,
-        '_HAS_DEFAULT_VALUE_CLASS': _HAS_DEFAULT_VALUE_CLASS,
         '__dataclass_builtins_object__': object,
     })
 
@@ -600,11 +587,8 @@ def _init_fn(fields, std_fields, kw_only_fields, frozen, has_post_init,
 
     # Does this class have a post-init function?
     if has_post_init:
-        params_str = ','.join((f.name if f.default is MISSING else
-                                (f"{f.name}.default "
-                                 f"if isinstance({f.name}, _HAS_DEFAULT_VALUE_CLASS) "
-                                 f"else {f.name}"))
-                              for f in fields if f._field_type is _FIELD_INITVAR)
+        params_str = ','.join(f.name for f in fields
+                              if f._field_type is _FIELD_INITVAR)
         body_lines.append(f'{self_name}.{_POST_INIT_NAME}({params_str})')
 
     # If no body lines, use 'pass'.
