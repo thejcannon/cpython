@@ -4344,20 +4344,25 @@ class TestKeywordArgs(unittest.TestCase):
 
 class TestConverters(unittest.TestCase):
     def test_argument_conversion(self):
-        @dataclass
-        class A:
-            a: int
-            b: str = field(converter=str)
-            c: int = field(converter=lambda x: x+1)
-            d: int = field(converter=lambda x: x+1, default=0)
-            e: int = field(converter=lambda x: x+1, default_factory=int)
+        for frozen in (True, False):
+            @dataclass(frozen=frozen)
+            class A:
+                a: int
+                b: str = field(converter=str)
+                c: int = field(converter=lambda x: x+1)
+                d: int = field(converter=lambda x: x+1, default=0)
+                e: int = field(converter=lambda x: x+1, default_factory=int)
 
-        a = A(a=1, b=2, c=3)
-        self.assertEqual(a.a, 1)
-        self.assertEqual(a.b, "2")
-        self.assertEqual(a.c, 4)
-        self.assertEqual(a.d, 1)
-        self.assertEqual(a.e, 0)
+            a = A(a=1, b=2, c=3)
+            self.assertEqual(a.a, 1)
+            self.assertEqual(a.b, "2")
+            self.assertEqual(a.c, 4)
+            self.assertEqual(a.d, 1)
+            self.assertEqual(a.e, 1)
+
+            if not frozen:
+                a.c = 2
+                self.assertEqual(a.c, 3)
 
 
 

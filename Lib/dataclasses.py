@@ -457,23 +457,16 @@ def _create_fn(name, args, body, *, globals=None, locals=None,
     return ns['__create_fn__'](**locals)
 
 
-def _field_assign(frozen, name, value, self_name):
-    # If we're a frozen class, then assign to our fields in __init__
-    # via object.__setattr__.  Otherwise, just use a simple
-    # assignment.
-    #
-    # self_name is what "self" is called in this function: don't
-    # hard-code "self", since that might be a field name.
-    if frozen:
-        return f'__dataclass_builtins_object__.__setattr__({self_name},{name!r},{value})'
-    return f'{self_name}.{name}={value}'
-
-
 def _field_init(f, frozen, globals, self_name, slots):
     # Return the text of the line in the body of __init__ that will
     # initialize this field.
 
     default_name = f'_dflt_{f.name}'
+    if f.default_factory is not MISSING:
+        globals[default_name] = f.default_factory
+    elif f.default is not MISSING:
+        globals[default_name] = f.default
+
     converter_name = f'_cvrt_{f.name}'
     if f.converter is not MISSING:
         globals[converter_name] = f.converter
@@ -481,12 +474,9 @@ def _field_init(f, frozen, globals, self_name, slots):
         if f.init:
             # This field has a default factory.  If a parameter is
             # given, use it.  If not, call the factory.
-            globals[default_name] = f.default_factory
             value = (f'{default_name}() '
                      f'if {f.name} is _HAS_DEFAULT_FACTORY '
-                     f'else '
-                    ) + (f'{converter_name}({f.name})'
-                        if f.converter is not MISSING else f.name)
+                     f'else {f.name}')
         else:
             # This is a field that's not in the __init__ params, but
             # has a default factory function.  It needs to be
@@ -502,18 +492,14 @@ def _field_init(f, frozen, globals, self_name, slots):
             # not set, and because it might be different per-class
             # (which, after all, is why we have a factory function!).
 
-            globals[default_name] = f.default_factory
             value = f'{default_name}()'
     else:
         # No default factory.
         if f.init:
-            globals[default_name] = f.default
-            value = (f'{converter_name}({f.name})'
-                     if f.converter is not MISSING else f.name)
+            value = f.name
         else:
             # If the class has slots, then initialize this field.
             if slots and f.default is not MISSING:
-                globals[default_name] = f.default
                 value = default_name
             else:
                 # This field does not need initialization: reading from it will
@@ -528,7 +514,13 @@ def _field_init(f, frozen, globals, self_name, slots):
         return None
 
     # Now, actually generate the field assignment.
-    return _field_assign(frozen, f.name, value, self_name)
+    if frozen:
+        # Converters are usually called by __setattr__, but since we
+        # aren't calling this object's __setattr__ we have to call them ourselves
+        if f.converter is not MISSING:
+            value = f'{converter_name}({value})'
+        return f'__dataclass_builtins_object__.__setattr__({self_name},{f.name!r},{value})'
+    return f'{self_name}.{f.name}={value}'
 
 
 def _init_param(f):
@@ -645,6 +637,17 @@ def _frozen_get_del_attr(cls, fields, globals):
                        globals=globals),
             )
 
+def _setattr_with_converter(cls, fields_with_converter, globals):
+    locals = {'cls': cls,
+              'converters': {field.name: field.converter
+                             for field in fields_with_converter},
+              "identity": lambda x: x}
+    return _create_fn('__setattr__',
+               ('self', 'name', 'value'),
+               (f'converter = converters.get(name, identity)',
+                f'super(cls, self).__setattr__(name, converter(value))'),
+               locals=locals,
+               globals=globals)
 
 def _cmp_fn(name, op, self_tuple, other_tuple, globals):
     # Create a comparison function.  If the fields in the object are
@@ -1066,6 +1069,12 @@ def _process_class(cls, init, repr, eq, order, unsafe_hash, frozen,
     # used in all of the following methods.
     field_list = [f for f in fields.values() if f._field_type is _FIELD]
 
+    fields_with_converter = [
+        field
+        for field in field_list
+        if field.converter is not MISSING
+    ]
+
     if repr:
         flds = [f for f in field_list if f.repr]
         _set_new_attribute(cls, '__repr__', _repr_fn(flds, globals))
@@ -1103,6 +1112,11 @@ def _process_class(cls, init, repr, eq, order, unsafe_hash, frozen,
             if _set_new_attribute(cls, fn.__name__, fn):
                 raise TypeError(f'Cannot overwrite attribute {fn.__name__} '
                                 f'in class {cls.__name__}')
+    elif fields_with_converter:
+        setattr_fn = _setattr_with_converter(cls, fields_with_converter, globals)
+        if _set_new_attribute(cls, '__setattr__', setattr_fn):
+            raise TypeError('Cannot overwrite attribute __setattr__ '
+                            f'in class {cls.__name__}')
 
     # Decide if/how we're going to create a hash function.
     hash_action = _hash_action[bool(unsafe_hash),
